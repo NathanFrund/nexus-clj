@@ -43,7 +43,9 @@
 
 ;; ── World queries ────────────────────────────────────────────────
 (defn agents-at-node
-  "Agents whose :location equals node-id. node-id may be a string or keyword."
+  "Agents whose :location equals node-id. node-id may be a string or keyword.
+   (Currently agents are identified by :name; a future iteration may introduce
+   stable :id values for Persona Engine integration.)"
   [world node-id]
   (let [kw (keyword node-id)]
     (filter #(= (:location %) kw) (:agents world))))
@@ -52,7 +54,9 @@
   "Return a lazy sequence of witnessed event maps for agents at node-id,
    optionally excluding a source agent.
    If the source is the only agent at the node, returns a single event
-   with :observer nil (the departure is still recorded)."
+   with :observer nil (the departure is still recorded).  This ensures that
+   the Persona Engine always knows that the action happened, even when nobody
+   else was present."
   ([world event-type node-id]
    (witnessed-events world event-type node-id nil))
   ([world event-type node-id source-agent]
@@ -72,7 +76,11 @@
               :location   node-id})))))
 
 ;; ── Movement helpers ─────────────────────────────────────────────
-(defn- find-edge [graph from-node to-node]
+(defn- find-edge
+  "Linear search for the edge connecting from-node to to-node.
+   For graphs with 100+ nodes a hash-index on edges would be faster,
+   but the current approach is fine for typical pointcrawl scales."
+  [graph from-node to-node]
   (let [from-str (name from-node)
         to-str   (name to-node)]
     (->> (edges-from graph from-str)
@@ -103,13 +111,22 @@
        :target     target-id
        :risk       risk})))
 
-(defn- handle-transition [world agent-name edge]
+(defn- handle-transition
+  "If the edge has a :transition portal, load the new graph and move
+   the agent to the entry node (keyword).  Validates that the entry node
+   exists in the target graph; if not, prints a warning and returns the
+   world unchanged."
+  [world agent-name edge]
   (if-let [portal (get-in edge [2 :transition])]
     (let [new-graph (load-graph (:graph portal))
           entry     (keyword (:entry portal))]
-      (-> world
-          (assoc :graph new-graph)
-          (apply-spatial-move agent-name entry)))
+      (if (contains? (:nodes new-graph) entry)
+        (-> world
+            (assoc :graph new-graph)
+            (apply-spatial-move agent-name entry))
+        (do
+          (println "Warning: portal entry not found:" entry)
+          world)))
     world))
 
 ;; ── Main movement function ──────────────────────────────────────
