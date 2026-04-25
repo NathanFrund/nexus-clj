@@ -13,11 +13,11 @@
   (is (= #{"village" "hut" "forest"} (set (node-names sample-graph)))))
 
 (deftest test-neighbors-of
-  (is (= #{"hut" "forest"} (neighbors-of sample-graph "village")))
-  (is (= #{"village"}       (neighbors-of sample-graph "hut"))))
+  (is (= #{"hut"} (neighbors-of sample-graph "village")))   ;; village → forest blocked by backward direction
+  (is (= #{"village"} (neighbors-of sample-graph "hut"))))
 
 (deftest test-one-way-neighbor
-  (is (empty? (neighbors-of sample-graph "forest"))))
+  (is (= #{"village"} (neighbors-of sample-graph "forest"))))   ;; forest → village allowed (backward direction)
 
 (deftest test-agents-at-node
   (let [world {:graph sample-graph

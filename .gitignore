@@ -2,3 +2,4 @@
 /classes
 /.cpcache
 /.clj-kondo/.cache
+.lsp
