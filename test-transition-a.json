@@ -1,0 +1,20 @@
+{
+  "nodes": {
+    "a1": { "label": "A1", "terrain": "open" },
+    "a2": { "label": "A2", "terrain": "open" }
+  },
+  "edges": [
+    [
+      "a1",
+      "a2",
+      {
+        "distance": 1,
+        "risk": 0.0,
+        "transition": {
+          "graph": "test-transition-b.json",
+          "entry": "b1"
+        }
+      }
+    ]
+  ]
+}
