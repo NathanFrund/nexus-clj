@@ -6,8 +6,7 @@
 
 ;; ── Test fixtures ────────────────────────────────────────────────
 (def sample-world
-  "A simple hypergraph world with two connected regions: village and dungeon.
-   Edges are carefully defined to test directionality."
+  "A simple hypergraph world with two connected regions: village and dungeon."
   {:nodes {:village-square {:label "Village Square" :terrain "open"}
            :village-hut    {:label "Elder's Hut" :terrain "building"}
            :village-forest {:label "Forest Path" :terrain "woods"}
@@ -41,21 +40,18 @@
     (is (= #{:village-square} (neighbors-of sample-world :village-hut))))
 
   (testing "One-way and cross-graph edges from village-forest"
-    ;; From village-forest: can reach village-square (backward edge) and dungeon-entry (forward edge)
     (is (= #{:village-square :dungeon-entry} (neighbors-of sample-world :village-forest))))
 
   (testing "Cross-graph neighbors (dungeon)"
-    ;; From dungeon-entry, you can reach dungeon-main and village-forest
     (is (= #{:dungeon-main :village-forest} (neighbors-of sample-world :dungeon-entry)))
-    ;; From dungeon-main, you can only reach dungeon-entry
     (is (= #{:dungeon-entry} (neighbors-of sample-world :dungeon-main)))))
 
 ;; ── Agent presence queries ──────────────────────────────────────
 (deftest test-agents-at-node
   (let [world (assoc sample-world :agents
-                     [{:name "Elder" :location :village-hut}
-                      {:name "Thug" :location :village-square}
-                      {:name "Goblin" :location :dungeon-entry}])]
+                     [{:id :elder :name "Elder" :location :village-hut}
+                      {:id :thug  :name "Thug"  :location :village-square}
+                      {:id :goblin :name "Goblin" :location :dungeon-entry}])]
     (testing "Agents at various nodes"
       (is (= 1 (count (agents-at-node world :village-square))))
       (is (= 1 (count (agents-at-node world :village-hut))))
@@ -65,9 +61,9 @@
 ;; ── Witnessed events ────────────────────────────────────────────
 (deftest test-witnessed-events-multiple-witnesses
   (let [world (assoc sample-world :agents
-                     [{:name "Elder" :location :village-hut}
-                      {:name "Thug" :location :village-square}
-                      {:name "Scout" :location :village-square}])
+                     [{:id :elder :name "Elder" :location :village-hut}
+                      {:id :thug  :name "Thug"  :location :village-square}
+                      {:id :scout :name "Scout" :location :village-square}])
         source (first (filter #(= (:name %) "Thug") (:agents world)))
         events (witnessed-events world :agent-departed :village-square source)]
     (is (= 1 (count events)))
@@ -75,7 +71,7 @@
 
 (deftest test-witnessed-events-no-witnesses
   (let [world (assoc sample-world :agents
-                     [{:name "Hermit" :location :dungeon-main}])
+                     [{:id :hermit :name "Hermit" :location :dungeon-main}])
         source (first (:agents world))
         events (witnessed-events world :agent-departed :dungeon-main source)]
     (is (= 1 (count events)))
@@ -100,7 +96,7 @@
 
 ;; ── Movement within a region ────────────────────────────────────
 (deftest test-move-within-village
-  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+  (let [world (assoc sample-world :agents [{:id :scout :name "Scout" :location :village-square}])
         result (move-agent world (first (:agents world)) :village-hut)]
     (testing "Agent moves successfully"
       (is (= :village-hut (:location (first (:agents result))))))
@@ -111,13 +107,13 @@
         (is (nil? (:observer ev)))))))
 
 (deftest test-move-blocked-by-direction
-  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+  (let [world (assoc sample-world :agents [{:id :scout :name "Scout" :location :village-square}])
         result (move-agent world (first (:agents world)) :village-forest)]
     (testing "Movement is blocked by backward-only edge"
       (is (= :village-square (:location (first (:agents result))))))))
 
 (deftest test-move-nonexistent-edge
-  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+  (let [world (assoc sample-world :agents [{:id :scout :name "Scout" :location :village-square}])
         result (move-agent world (first (:agents world)) :mars)]
     (testing "Cannot move to nonexistent node"
       (is (= :village-square (:location (first (:agents result))))))))
@@ -125,8 +121,8 @@
 ;; ── Movement with witnesses ────────────────────────────────────
 (deftest test-move-with-witnesses
   (let [world (assoc sample-world :agents
-                     [{:name "Scout" :location :village-square}
-                      {:name "Lookout" :location :village-square}])
+                     [{:id :scout   :name "Scout"   :location :village-square}
+                      {:id :lookout :name "Lookout" :location :village-square}])
         result (move-agent world (first (:agents world)) :village-hut)
         events (:pending-events result)]
     (testing "Scout moves to village-hut"
@@ -142,7 +138,7 @@
   (let [graph {:nodes {:a {:label "A"} :b {:label "B"}}
                :edges [[:a :b {:distance 1 :risk 1.0}]]}
         world (assoc sample-world :nodes (:nodes graph) :edges (:edges graph)
-                     :agents [{:name "Scout" :location :a}])
+                     :agents [{:id :scout :name "Scout" :location :a}])
         result (with-redefs [rand (constantly 0.0)]
                  (move-agent world (first (:agents world)) :b))
         events (:pending-events result)]
@@ -154,8 +150,8 @@
 ;; ── Cross-graph movement (hypergraph) ────────────────────────
 (deftest test-move-across-graphs
   (let [world (assoc sample-world :agents
-                     [{:name "Adventurer" :location :village-forest}
-                      {:name "Guard" :location :village-forest}])
+                     [{:id :adventurer :name "Adventurer" :location :village-forest}
+                      {:id :guard      :name "Guard"      :location :village-forest}])
         result (move-agent world (first (:agents world)) :dungeon-entry)
         events (:pending-events result)]
     (testing "Agent moves from village to dungeon"
@@ -170,7 +166,7 @@
 
 (deftest test-move-within-dungeon-after-entry
   (let [world (assoc sample-world :agents
-                     [{:name "Adventurer" :location :dungeon-entry}])
+                     [{:id :adventurer :name "Adventurer" :location :dungeon-entry}])
         result (move-agent world (first (:agents world)) :dungeon-main)]
     (testing "Agent moves within dungeon"
       (is (= :dungeon-main (:location (first (:agents result))))))
@@ -183,8 +179,8 @@
 ;; ── World introspection ────────────────────────────────────────
 (deftest test-world-summary
   (let [world (assoc sample-world :agents
-                     [{:name "Alice" :location :village-square}
-                      {:name "Bob" :location :dungeon-entry}])
+                     [{:id :alice :name "Alice" :location :village-square}
+                      {:id :bob   :name "Bob"   :location :dungeon-entry}])
         summary (world-summary world)]
     (is (= 5 (:node-count summary)))
     (is (= 4 (:edge-count summary)))
@@ -193,7 +189,6 @@
 ;; ── Load world from JSON (if test files exist) ─────────────────
 (deftest test-load-world-structure
   (testing "A loaded world has the expected structure"
-    ;; We use sample-world directly since load-world reads from files
     (is (contains? sample-world :nodes))
     (is (contains? sample-world :edges))
     (is (contains? sample-world :agents))

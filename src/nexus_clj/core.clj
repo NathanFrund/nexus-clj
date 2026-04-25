@@ -14,6 +14,7 @@
                                    x))
                      x))
                  m))
+
 (defn load-world
   "Load a Nexus world from a JSON file containing multiple graphs.
    Normalizes all keys to keywords so the rest of the system works with
@@ -34,7 +35,6 @@
                           (vals graphs))
 
         ;; Flatten all edges into one vector
-        ;; Edges are already [from to attrs] with node IDs as keywords
         all-edges (reduce (fn [acc graph]
                             (into acc (:edges graph)))
                           []
@@ -83,15 +83,14 @@
 ;; ── Agent queries ────────────────────────────────────────────────
 (defn agents-at-node
   "Return all agents currently at node-id. node-id may be a string or keyword.
-   (Currently agents are identified by :name; a future iteration may introduce
-   stable :id values for Persona Engine integration.)"
+   Agents are uniquely identified by :id (a keyword); :name is for display."
   [world node-id]
   (let [kw (keyword node-id)]
     (filter #(= (:location %) kw) (:agents world))))
 
 (defn witnessed-events
   "Return a sequence of witnessed event maps for agents at node-id,
-   optionally excluding a source agent.
+   optionally excluding a source agent (identified by :id).
    If the source is the only agent at the node, returns a single event
    with :observer nil (the departure is still recorded). This ensures that
    the Persona Engine always knows that the action happened, even when nobody
@@ -99,8 +98,8 @@
   ([world event-type node-id]
    (witnessed-events world event-type node-id nil))
   ([world event-type node-id source-agent]
-   (let [source-name (:name source-agent)
-         witnesses   (remove #(= (:name %) source-name) (agents-at-node world node-id))]
+   (let [source-id  (:id source-agent)
+         witnesses (remove #(= (:id %) source-id) (agents-at-node world node-id))]
      (if (seq witnesses)
        (map (fn [observer]
               {:event-type event-type
@@ -127,11 +126,11 @@
          first)))
 
 (defn- apply-spatial-move
-  "Return world with the named agent's :location set to target-id (keyword)."
-  [world agent-name target-id]
+  "Return world with the agent's :location set to target-id. Agent is found by :id."
+  [world agent-id target-id]
   (update world :agents
           (fn [agents]
-            (mapv #(if (= (:name %) agent-name)
+            (mapv #(if (= (:id %) agent-id)
                      (assoc % :location target-id)
                      %)
                   agents))))
@@ -165,7 +164,7 @@
                         hazard (conj hazard))
             world'    (-> world
                           (update :pending-events (fnil into []) events)
-                          (apply-spatial-move (:name agent) kw-target))]
+                          (apply-spatial-move (:id agent) kw-target))]
         world')
       (do (println "Movement not allowed")
           world))))
@@ -177,5 +176,5 @@
   {:node-count (count (:nodes world))
    :edge-count (count (:edges world))
    :agent-count (count (:agents world))
-   :agents (map (fn [a] {:name (:name a) :location (:location a)})
+   :agents (map (fn [a] {:id (:id a) :name (:name a) :location (:location a)})
                 (:agents world))})
