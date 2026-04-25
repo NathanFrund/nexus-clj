@@ -1,27 +1,50 @@
 (ns nexus-clj.core
   (:require [cheshire.core :as json]))
 
-;; ── Graph loading ─────────────────────────────────────────────────
-(defn load-graph
-  "Load a Nexus graph from a JSON file path. Returns a map with :nodes and :edges.
-   Node IDs are Clojure keywords (JSON keys are keywordised)."
+;; ── World loading ─────────────────────────────────────────────────
+(defn load-world
+  "Load a Nexus world from a JSON file containing multiple graphs.
+   Returns a map with :nodes (all nodes flattened), :edges (all edges),
+   and :graph-metadata (original graph structure for reference).
+   Node IDs are keywords and globally unique across all graphs."
   [filepath]
-  (-> filepath slurp (json/parse-string true)))
+  (let [config (json/parse-string (slurp filepath) true)
+        graphs (:graphs config)
+        
+        ;; Flatten all nodes into one map
+        all-nodes (reduce (fn [acc graph]
+                            (merge acc (:nodes graph)))
+                          {}
+                          (vals graphs))
+        
+        ;; Flatten all edges into one vector
+        all-edges (reduce (fn [acc graph]
+                            (into acc (:edges graph)))
+                          []
+                          (vals graphs))]
+    {:nodes all-nodes
+     :edges all-edges
+     :agents []
+     :graph-metadata graphs}))
 
-;; ── Graph queries ────────────────────────────────────────────────
+;; ── World queries ────────────────────────────────────────────────
 (defn node-names
-  "Return the set of node IDs (keywords) in the graph."
-  [graph]
-  (keys (:nodes graph)))
+  "Return the set of all node IDs (keywords) in the world."
+  [world]
+  (keys (:nodes world)))
 
-(defn edges-from [graph node-id]
-  (let [id-str (name node-id)] ;; Normalize input to string
+(defn edges-from
+  "Return all edges incident to node-id."
+  [world node-id]
+  (let [id-str (name node-id)]
     (filter (fn [[a b _]]
               (or (= (name a) id-str)
                   (= (name b) id-str)))
-            (:edges graph))))
+            (:edges world))))
 
-(defn direction-allows? [edge from-id]
+(defn direction-allows?
+  "Check if movement along edge is allowed from from-id."
+  [edge from-id]
   (let [dir (get-in edge [2 :direction] "both")
         a   (first edge)
         b   (second edge)
@@ -32,18 +55,18 @@
 
 (defn neighbors-of
   "Return the set of node IDs (keywords) directly reachable from node-id."
-  [graph node-id]
+  [world node-id]
   (let [kw (keyword node-id)]
-    (->> (edges-from graph kw)
+    (->> (edges-from world kw)
          (keep (fn [edge]
                  (when (direction-allows? edge kw)
                    (let [a (first edge) b (second edge)]
                      (if (= a kw) b a)))))
          set)))
 
-;; ── World queries ────────────────────────────────────────────────
+;; ── Agent queries ────────────────────────────────────────────────
 (defn agents-at-node
-  "Agents whose :location equals node-id. node-id may be a string or keyword.
+  "Return all agents currently at node-id. node-id may be a string or keyword.
    (Currently agents are identified by :name; a future iteration may introduce
    stable :id values for Persona Engine integration.)"
   [world node-id]
@@ -51,10 +74,10 @@
     (filter #(= (:location %) kw) (:agents world))))
 
 (defn witnessed-events
-  "Return a lazy sequence of witnessed event maps for agents at node-id,
+  "Return a sequence of witnessed event maps for agents at node-id,
    optionally excluding a source agent.
    If the source is the only agent at the node, returns a single event
-   with :observer nil (the departure is still recorded).  This ensures that
+   with :observer nil (the departure is still recorded). This ensures that
    the Persona Engine always knows that the action happened, even when nobody
    else was present."
   ([world event-type node-id]
@@ -78,12 +101,12 @@
 ;; ── Movement helpers ─────────────────────────────────────────────
 (defn- find-edge
   "Linear search for the edge connecting from-node to to-node.
-   For graphs with 100+ nodes a hash-index on edges would be faster,
+   For worlds with 100+ nodes, a hash-index on edges would be faster,
    but the current approach is fine for typical pointcrawl scales."
-  [graph from-node to-node]
+  [world from-node to-node]
   (let [from-str (name from-node)
         to-str   (name to-node)]
-    (->> (edges-from graph from-str)
+    (->> (edges-from world from-str)
          (filter (fn [e]
                    (let [other (if (= (name (first e)) from-str)
                                  (name (second e))
@@ -111,47 +134,37 @@
        :target     target-id
        :risk       risk})))
 
-(defn- handle-transition
-  "If the edge has a :transition portal, load the new graph and move
-   the agent to the entry node (keyword).  Validates that the entry node
-   exists in the target graph; if not, prints a warning and returns the
-   world unchanged."
-  [world agent-name edge]
-  (if-let [portal (get-in edge [2 :transition])]
-    (let [new-graph (load-graph (:graph portal))
-          entry     (keyword (:entry portal))]
-      (if (contains? (:nodes new-graph) entry)
-        (-> world
-            (assoc :graph new-graph)
-            (apply-spatial-move agent-name entry))
-        (do
-          (println "Warning: portal entry not found:" entry)
-          world)))
-    world))
-
 ;; ── Main movement function ──────────────────────────────────────
 (defn move-agent
   "Move an agent to a target node, respecting edge direction and risk.
    Generates :agent-departed events for all observers at the origin node
    before the move. If a hazard occurs, a :travel-hazard event is added.
    All events are stored under :pending-events.
-   If the edge has a portal transition, the world's graph is swapped
-   and the agent placed at the entry node."
+   With hypergraphs, there is no graph switching; the world state remains
+   constant across regions."
   [world agent target-id]
   (let [current   (:location agent)
         kw-target (keyword target-id)
-        edge      (find-edge (:graph world) current kw-target)]
+        edge      (find-edge world current kw-target)]
     (if (and edge (direction-allows? edge current))
       (let [observers (witnessed-events world :agent-departed current agent)
             hazard    (check-hazard (nth edge 2) kw-target)
             events    (cond-> (vec observers)
                         hazard (conj hazard))
             world'    (-> world
-                          (assoc :pending-events [])   ;; ← reset events
+                          (assoc :pending-events [])
                           (update :pending-events (fnil into []) events)
-                          (apply-spatial-move (:name agent) kw-target))
-            _         (when hazard (println (str "Hazard! " (name kw-target))))
-            world''   (handle-transition world' (:name agent) edge)]
-        world'')
+                          (apply-spatial-move (:name agent) kw-target))]
+        world')
       (do (println "Movement not allowed")
           world))))
+
+;; ── World introspection ──────────────────────────────────────────
+(defn world-summary
+  "Return a summary of the world state for debugging."
+  [world]
+  {:node-count (count (:nodes world))
+   :edge-count (count (:edges world))
+   :agent-count (count (:agents world))
+   :agents (map (fn [a] {:name (:name a) :location (:location a)})
+                (:agents world))})
