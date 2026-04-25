@@ -1,14 +1,30 @@
 (ns nexus-clj.core
-  (:require [cheshire.core :as json]))
+  (:require [cheshire.core :as json]
+            [clojure.walk :as walk]))
 
 ;; ── World loading ─────────────────────────────────────────────────
+(defn- keywordize-keys
+  "Recursively convert all string keys to keywords, including in nested structures.
+   This normalizes JSON input so the rest of the code only deals with keywords."
+  [m]
+  (walk/postwalk (fn [x]
+                   (if (map? x)
+                     (into {} (map (fn [[k v]]
+                                     [(if (string? k) (keyword k) k) v])
+                                   x))
+                     x))
+                 m))
 (defn load-world
   "Load a Nexus world from a JSON file containing multiple graphs.
+   Normalizes all keys to keywords so the rest of the system works with
+   consistent data types.
    Returns a map with :nodes (all nodes flattened), :edges (all edges),
    and :graph-metadata (original graph structure for reference).
    Node IDs are keywords and globally unique across all graphs."
   [filepath]
-  (let [config (json/parse-string (slurp filepath) true)
+  (let [config (-> (slurp filepath)
+                   (json/parse-string true)
+                   keywordize-keys)
         graphs (:graphs config)
 
         ;; Flatten all nodes into one map
@@ -17,14 +33,10 @@
                           {}
                           (vals graphs))
 
-        ;; Flatten all edges into one vector, converting node IDs to keywords
+        ;; Flatten all edges into one vector
+        ;; Edges are already [from to attrs] with node IDs as keywords
         all-edges (reduce (fn [acc graph]
-                            (into acc
-                                  (map (fn [edge]
-                                         [(keyword (first edge))
-                                          (keyword (second edge))
-                                          (nth edge 2)])
-                                       (:edges graph))))
+                            (into acc (:edges graph)))
                           []
                           (vals graphs))]
     {:nodes all-nodes
@@ -41,10 +53,9 @@
 (defn edges-from
   "Return all edges incident to node-id."
   [world node-id]
-  (let [id-str (name node-id)]
+  (let [kw (keyword node-id)]
     (filter (fn [[a b _]]
-              (or (= (name a) id-str)
-                  (= (name b) id-str)))
+              (or (= a kw) (= b kw)))
             (:edges world))))
 
 (defn direction-allows?
@@ -105,18 +116,14 @@
 
 ;; ── Movement helpers ─────────────────────────────────────────────
 (defn- find-edge
-  "Linear search for the edge connecting from-node to to-node.
-   For worlds with 100+ nodes, a hash-index on edges would be faster,
-   but the current approach is fine for typical pointcrawl scales."
+  "Linear search for the edge connecting from-node to to-node."
   [world from-node to-node]
-  (let [from-str (name from-node)
-        to-str   (name to-node)]
-    (->> (edges-from world from-str)
-         (filter (fn [e]
-                   (let [other (if (= (name (first e)) from-str)
-                                 (name (second e))
-                                 (name (first e)))]
-                     (= other to-str))))
+  (let [from-kw (keyword from-node)
+        to-kw   (keyword to-node)]
+    (->> (edges-from world from-kw)
+         (filter (fn [[a b _]]
+                   (or (and (= a from-kw) (= b to-kw))
+                       (and (= b from-kw) (= a to-kw)))))
          first)))
 
 (defn- apply-spatial-move
@@ -157,7 +164,6 @@
             events    (cond-> (vec observers)
                         hazard (conj hazard))
             world'    (-> world
-                          (assoc :pending-events [])
                           (update :pending-events (fnil into []) events)
                           (apply-spatial-move (:name agent) kw-target))]
         world')
