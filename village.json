@@ -1,0 +1,35 @@
+{
+  "nodes": {
+    "village": {
+      "label": "Village Square",
+      "terrain": "open"
+    },
+    "elderHut": {
+      "label": "Elder's Hut",
+      "terrain": "building"
+    },
+    "forest": {
+      "label": "Forest Path",
+      "terrain": "woods"
+    }
+  },
+  "edges": [
+    [
+      "village",
+      "elderHut",
+      {
+        "distance": 1,
+        "risk": 0.0
+      }
+    ],
+    [
+      "village",
+      "forest",
+      {
+        "distance": 2,
+        "risk": 0.3,
+        "direction": "backward"
+      }
+    ]
+  ]
+}
