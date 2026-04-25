@@ -1,7 +1,0 @@
-{
-  "nodes": {
-    "b1": { "label": "B1", "terrain": "open" },
-    "b2": { "label": "B2", "terrain": "open" }
-  },
-  "edges": [["b1", "b2", { "distance": 1, "risk": 0.0 }]]
-}

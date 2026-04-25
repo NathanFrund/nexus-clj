@@ -16,12 +16,19 @@
         }
       },
       "edges": [
-        ["village", "elderHut", { "distance": 1, "risk": 0.0 }],
-        [
-          "village",
-          "forest",
-          { "distance": 2, "risk": 0.3, "direction": "backward" }
-        ]
+        {
+          "from": "village",
+          "to": "elderHut",
+          "distance": 1,
+          "risk": 0.0
+        },
+        {
+          "from": "village",
+          "to": "forest",
+          "distance": 2,
+          "risk": 0.3,
+          "direction": "backward"
+        }
       ]
     }
   }

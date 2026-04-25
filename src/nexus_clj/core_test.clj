@@ -6,26 +6,25 @@
 
 ;; ── Test fixtures ────────────────────────────────────────────────
 (def sample-world
-  "A simple hypergraph world with two connected regions: village and dungeon."
   {:nodes {:village-square {:label "Village Square" :terrain "open"}
            :village-hut    {:label "Elder's Hut" :terrain "building"}
            :village-forest {:label "Forest Path" :terrain "woods"}
            :dungeon-entry  {:label "Dungeon Entry" :terrain "building"}
            :dungeon-main   {:label "Main Chamber" :terrain "dungeon"}}
-   :edges [[:village-square :village-hut      {:distance 1 :risk 0.0}]
-           [:village-square :village-forest   {:distance 2 :risk 0.3 :direction "backward"}]
-           [:village-forest :dungeon-entry    {:distance 3 :risk 0.5}]
-           [:dungeon-entry :dungeon-main      {:distance 1 :risk 0.0}]]
+   :edges [{:from :village-square :to :village-hut      :distance 1 :risk 0.0}
+           {:from :village-square :to :village-forest   :distance 2 :risk 0.3 :direction "backward"}
+           {:from :village-forest :to :dungeon-entry    :distance 3 :risk 0.5}
+           {:from :dungeon-entry  :to :dungeon-main      :distance 1 :risk 0.0}]
    :agents []
    :graph-metadata {:village {:nodes {:village-square {:label "Village Square"}
                                       :village-hut {:label "Elder's Hut"}
                                       :village-forest {:label "Forest Path"}}
-                              :edges [[:village-square :village-hut {:distance 1 :risk 0.0}]
-                                      [:village-square :village-forest {:distance 2 :risk 0.3 :direction "backward"}]]}
+                              :edges [{:from :village-square :to :village-hut :distance 1 :risk 0.0}
+                                      {:from :village-square :to :village-forest :distance 2 :risk 0.3 :direction "backward"}]}
                     :dungeon {:nodes {:dungeon-entry {:label "Dungeon Entry"}
                                       :dungeon-main {:label "Main Chamber"}}
-                              :edges [[:dungeon-entry :dungeon-main {:distance 1 :risk 0.0}]
-                                      [:village-forest :dungeon-entry {:distance 3 :risk 0.5}]]}}})
+                              :edges [{:from :dungeon-entry :to :dungeon-main :distance 1 :risk 0.0}
+                                      {:from :village-forest :to :dungeon-entry :distance 3 :risk 0.5}]}}})
 
 ;; ── Graph/world queries ─────────────────────────────────────────
 (deftest test-node-names
@@ -136,7 +135,7 @@
 ;; ── Movement with hazards ──────────────────────────────────────
 (deftest test-move-with-hazard
   (let [graph {:nodes {:a {:label "A"} :b {:label "B"}}
-               :edges [[:a :b {:distance 1 :risk 1.0}]]}
+               :edges [{:from :a :to :b :distance 1 :risk 1.0}]}
         world (assoc sample-world :nodes (:nodes graph) :edges (:edges graph)
                      :agents [{:id :scout :name "Scout" :location :a}])
         result (with-redefs [rand (constantly 0.0)]
