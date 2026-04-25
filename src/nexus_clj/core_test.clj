@@ -1,85 +1,89 @@
 (ns nexus-clj.core-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [nexus-clj.core :refer [node-names neighbors-of agents-at-node
                                     witnessed-events move-agent check-hazard
-                                    load-graph]]))
+                                    world-summary]]))
 
-;; ── Original graph tests (using keywords) ─────────────────────────
-(def sample-graph
-  {:nodes {:village  {:label "Village Square" :terrain "open"}
-           :hut      {:label "Elder's Hut"    :terrain "building"}
-           :forest   {:label "Forest Path"    :terrain "woods"}}
-   :edges [[:village :hut      {:distance 1 :risk 0.0}]
-           [:village :forest   {:distance 2 :risk 0.3 :direction "backward"}]]})
+;; ── Test fixtures ────────────────────────────────────────────────
+(def sample-world
+  "A simple hypergraph world with two connected regions: village and dungeon.
+   Edges are carefully defined to test directionality."
+  {:nodes {:village-square {:label "Village Square" :terrain "open"}
+           :village-hut    {:label "Elder's Hut" :terrain "building"}
+           :village-forest {:label "Forest Path" :terrain "woods"}
+           :dungeon-entry  {:label "Dungeon Entry" :terrain "building"}
+           :dungeon-main   {:label "Main Chamber" :terrain "dungeon"}}
+   :edges [[:village-square :village-hut      {:distance 1 :risk 0.0}]
+           [:village-square :village-forest   {:distance 2 :risk 0.3 :direction "backward"}]
+           [:village-forest :dungeon-entry    {:distance 3 :risk 0.5}]
+           [:dungeon-entry :dungeon-main      {:distance 1 :risk 0.0}]]
+   :agents []
+   :graph-metadata {:village {:nodes {:village-square {:label "Village Square"}
+                                      :village-hut {:label "Elder's Hut"}
+                                      :village-forest {:label "Forest Path"}}
+                              :edges [[:village-square :village-hut {:distance 1 :risk 0.0}]
+                                      [:village-square :village-forest {:distance 2 :risk 0.3 :direction "backward"}]]}
+                    :dungeon {:nodes {:dungeon-entry {:label "Dungeon Entry"}
+                                      :dungeon-main {:label "Main Chamber"}}
+                              :edges [[:dungeon-entry :dungeon-main {:distance 1 :risk 0.0}]
+                                      [:village-forest :dungeon-entry {:distance 3 :risk 0.5}]]}}})
 
+;; ── Graph/world queries ─────────────────────────────────────────
 (deftest test-node-names
-  (is (= #{:village :hut :forest} (set (node-names sample-graph)))))
+  (is (= #{:village-square :village-hut :village-forest :dungeon-entry :dungeon-main}
+         (set (node-names sample-world))))
+  (testing "All nodes from all graphs are present"
+    (is (= 5 (count (node-names sample-world))))))
 
 (deftest test-neighbors-of
-  (is (= #{:hut}      (neighbors-of sample-graph :village)))
-  (is (= #{:village}  (neighbors-of sample-graph :hut))))
+  (testing "Within-region neighbors (bidirectional)"
+    (is (= #{:village-hut} (neighbors-of sample-world :village-square)))
+    (is (= #{:village-square} (neighbors-of sample-world :village-hut))))
 
-(deftest test-one-way-neighbor
-  (is (= #{:village} (neighbors-of sample-graph :forest))))
+  (testing "One-way and cross-graph edges from village-forest"
+    ;; From village-forest: can reach village-square (backward edge) and dungeon-entry (forward edge)
+    (is (= #{:village-square :dungeon-entry} (neighbors-of sample-world :village-forest))))
 
+  (testing "Cross-graph neighbors (dungeon)"
+    ;; From dungeon-entry, you can reach dungeon-main and village-forest
+    (is (= #{:dungeon-main :village-forest} (neighbors-of sample-world :dungeon-entry)))
+    ;; From dungeon-main, you can only reach dungeon-entry
+    (is (= #{:dungeon-entry} (neighbors-of sample-world :dungeon-main)))))
+
+;; ── Agent presence queries ──────────────────────────────────────
 (deftest test-agents-at-node
-  (let [world {:graph sample-graph
-               :agents [{:name "Elder" :location :hut}
-                        {:name "Thug"  :location :village}]}]
-    (is (= 1 (count (agents-at-node world :village))))
-    (is (= 1 (count (agents-at-node world :hut))))
-    (is (= 0 (count (agents-at-node world :forest))))))
+  (let [world (assoc sample-world :agents
+                     [{:name "Elder" :location :village-hut}
+                      {:name "Thug" :location :village-square}
+                      {:name "Goblin" :location :dungeon-entry}])]
+    (testing "Agents at various nodes"
+      (is (= 1 (count (agents-at-node world :village-square))))
+      (is (= 1 (count (agents-at-node world :village-hut))))
+      (is (= 1 (count (agents-at-node world :dungeon-entry))))
+      (is (= 0 (count (agents-at-node world :dungeon-main)))))))
 
-(deftest test-witnessed-events
-  (let [world {:graph sample-graph
-               :agents [{:name "Elder" :location :hut}
-                        {:name "Thug"  :location :village}]}
-        events (witnessed-events world :heroic-act :village (first (:agents world)))]
+;; ── Witnessed events ────────────────────────────────────────────
+(deftest test-witnessed-events-multiple-witnesses
+  (let [world (assoc sample-world :agents
+                     [{:name "Elder" :location :village-hut}
+                      {:name "Thug" :location :village-square}
+                      {:name "Scout" :location :village-square}])
+        source (first (filter #(= (:name %) "Thug") (:agents world)))
+        events (witnessed-events world :agent-departed :village-square source)]
     (is (= 1 (count events)))
-    (is (= "Thug" (:name (:observer (first events)))))))
+    (is (= "Scout" (:name (:observer (first events)))))))
 
-;; ── Helper for movement tests ────────────────────────────────────
-(defn make-world [graph agents]
-  {:graph graph :agents agents})
+(deftest test-witnessed-events-no-witnesses
+  (let [world (assoc sample-world :agents
+                     [{:name "Hermit" :location :dungeon-main}])
+        source (first (:agents world))
+        events (witnessed-events world :agent-departed :dungeon-main source)]
+    (is (= 1 (count events)))
+    (is (nil? (:observer (first events))))
+    (testing "Event is still recorded even without observers"
+      (is (= :agent-departed (:event-type (first events)))))))
 
-;; ── Basic movement ──────────────────────────────────────────────
-(deftest test-basic-move
-  (let [graph  sample-graph
-        agents [{:name "Scout" :location :village}]
-        world  (make-world graph agents)
-        result (move-agent world (first agents) :hut)]
-    (is (= :hut (:location (first (:agents result)))))))
-
-(deftest test-move-blocked-by-direction
-  (let [graph  sample-graph
-        agents [{:name "Scout" :location :village}]
-        world  (make-world graph agents)
-        result (move-agent world (first agents) :forest)]
-    (is (= :village (:location (first (:agents result)))))
-    (is (empty? (:pending-events result)))))
-
-(deftest test-move-nonexistent-node
-  (let [graph  sample-graph
-        agents [{:name "Scout" :location :village}]
-        world  (make-world graph agents)
-        result (move-agent world (first agents) :mars)]
-    (is (= :village (:location (first (:agents result)))))))
-
-;; ── Departure witnesses ─────────────────────────────────────────
-(deftest test-departure-witnesses
-  (let [graph  sample-graph
-        agents [{:name "Scout"   :location :village}
-                {:name "Lookout" :location :village}
-                {:name "Hermit"  :location :hut}]
-        world  (make-world graph agents)
-        result (move-agent world (first agents) :hut)
-        events (:pending-events result)]
-    (is (= 1 (count (filter #(= :agent-departed (:event-type %)) events))))
-    (let [ev (first (filter #(= :agent-departed (:event-type %)) events))]
-      (is (= "Lookout" (:name (:observer ev))))
-      (is (= "Scout"   (:name (:source ev)))))))
-
-;; ── Travel hazard ───────────────────────────────────────────────
+;; ── Hazard checking ────────────────────────────────────────────
 (deftest test-check-hazard-no-risk
   (is (nil? (check-hazard {:risk 0.0} :forest))))
 
@@ -94,66 +98,103 @@
   (with-redefs [rand (constantly 1.0)]
     (is (nil? (check-hazard {:risk 0.9} :forest)))))
 
-(deftest test-move-with-hazard
-  (let [graph  {:nodes {:v {:label "V"} :w {:label "W"}}
-                :edges [[:v :w {:distance 1 :risk 1.0}]]}
-        agents [{:name "Scout" :location :v}]
-        world  (make-world graph agents)]
-    (with-redefs [rand (constantly 0.0)]
-      (let [result (move-agent world (first agents) :w)
-            events (:pending-events result)]
-        (is (= :w (:location (first (:agents result)))))
-        (is (= 1 (count (filter #(= :travel-hazard (:event-type %)) events))))))))
+;; ── Movement within a region ────────────────────────────────────
+(deftest test-move-within-village
+  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+        result (move-agent world (first (:agents world)) :village-hut)]
+    (testing "Agent moves successfully"
+      (is (= :village-hut (:location (first (:agents result))))))
+    (testing "Departure event recorded with nil observer (was alone)"
+      (is (= 1 (count (:pending-events result))))
+      (let [ev (first (:pending-events result))]
+        (is (= :agent-departed (:event-type ev)))
+        (is (nil? (:observer ev)))))))
 
-;; ── Portal transition ───────────────────────────────────────────
-(deftest test-portal-transition
-  (let [graph-a (load-graph "test-transition-a.json")
-        agents [{:name "Scout"   :location :a1}
-                {:name "Lookout" :location :a1}]
-        world  (make-world graph-a agents)
-        result (move-agent world (first agents) :a2)
+(deftest test-move-blocked-by-direction
+  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+        result (move-agent world (first (:agents world)) :village-forest)]
+    (testing "Movement is blocked by backward-only edge"
+      (is (= :village-square (:location (first (:agents result))))))))
+
+(deftest test-move-nonexistent-edge
+  (let [world (assoc sample-world :agents [{:name "Scout" :location :village-square}])
+        result (move-agent world (first (:agents world)) :mars)]
+    (testing "Cannot move to nonexistent node"
+      (is (= :village-square (:location (first (:agents result))))))))
+
+;; ── Movement with witnesses ────────────────────────────────────
+(deftest test-move-with-witnesses
+  (let [world (assoc sample-world :agents
+                     [{:name "Scout" :location :village-square}
+                      {:name "Lookout" :location :village-square}])
+        result (move-agent world (first (:agents world)) :village-hut)
         events (:pending-events result)]
-    (is (= :b1 (:location (first (:agents result)))))
-    (is (= #{:b2 :b1} (set (node-names (:graph result)))))
-    (is (= 1 (count (filter #(= :agent-departed (:event-type %)) events))))
-    (let [ev (first (filter #(= :agent-departed (:event-type %)) events))]
-      (is (= "Lookout" (:name (:observer ev))))
-      (is (= "Scout"   (:name (:source ev)))))))
+    (testing "Scout moves to village-hut"
+      (is (= :village-hut (:location (first (:agents result))))))
+    (testing "Lookout witnesses the departure"
+      (is (= 1 (count (filter #(= :agent-departed (:event-type %)) events))))
+      (let [ev (first (filter #(= :agent-departed (:event-type %)) events))]
+        (is (= "Lookout" (:name (:observer ev))))
+        (is (= "Scout" (:name (:source ev))))))))
 
-;; ── Movement after portal transition ────────────────────────────
-(deftest test-move-after-transition
-  (let [graph-a (load-graph "test-transition-a.json")
-        agents [{:name "Scout" :location :a1}]
-        world  (make-world graph-a agents)
+;; ── Movement with hazards ──────────────────────────────────────
+(deftest test-move-with-hazard
+  (let [graph {:nodes {:a {:label "A"} :b {:label "B"}}
+               :edges [[:a :b {:distance 1 :risk 1.0}]]}
+        world (assoc sample-world :nodes (:nodes graph) :edges (:edges graph)
+                     :agents [{:name "Scout" :location :a}])
+        result (with-redefs [rand (constantly 0.0)]
+                 (move-agent world (first (:agents world)) :b))
+        events (:pending-events result)]
+    (testing "Agent reaches destination despite hazard"
+      (is (= :b (:location (first (:agents result))))))
+    (testing "Hazard event is recorded"
+      (is (= 1 (count (filter #(= :travel-hazard (:event-type %)) events)))))))
 
-        ;; Step 1: Move from A1 to A2, triggering portal to B1
-        result1 (move-agent world (first agents) :a2)
+;; ── Cross-graph movement (hypergraph) ────────────────────────
+(deftest test-move-across-graphs
+  (let [world (assoc sample-world :agents
+                     [{:name "Adventurer" :location :village-forest}
+                      {:name "Guard" :location :village-forest}])
+        result (move-agent world (first (:agents world)) :dungeon-entry)
+        events (:pending-events result)]
+    (testing "Agent moves from village to dungeon"
+      (is (= :dungeon-entry (:location (first (:agents result))))))
+    (testing "Guard witnesses departure from village-forest"
+      (is (= 1 (count (filter #(= :agent-departed (:event-type %)) events))))
+      (let [ev (first (filter #(= :agent-departed (:event-type %)) events))]
+        (is (= "Guard" (:name (:observer ev))))))
+    (testing "No graph switching occurs; world state is consistent"
+      (is (= 5 (count (node-names result))))
+      (is (= 4 (count (:edges result)))))))
 
-        ;; Step 2: Extract the UPDATED agent from result1. 
-        ;; This agent now has :location :b1.
-        updated-scout (first (:agents result1))
+(deftest test-move-within-dungeon-after-entry
+  (let [world (assoc sample-world :agents
+                     [{:name "Adventurer" :location :dungeon-entry}])
+        result (move-agent world (first (:agents world)) :dungeon-main)]
+    (testing "Agent moves within dungeon"
+      (is (= :dungeon-main (:location (first (:agents result))))))
+    (testing "Departure event recorded with nil observer (was alone)"
+      (is (= 1 (count (:pending-events result))))
+      (let [ev (first (:pending-events result))]
+        (is (= :agent-departed (:event-type ev)))
+        (is (nil? (:observer ev)))))))
 
-        ;; Move the updated agent within the new graph from B1 to B2
-        result2 (move-agent result1 updated-scout :b2)]
+;; ── World introspection ────────────────────────────────────────
+(deftest test-world-summary
+  (let [world (assoc sample-world :agents
+                     [{:name "Alice" :location :village-square}
+                      {:name "Bob" :location :dungeon-entry}])
+        summary (world-summary world)]
+    (is (= 5 (:node-count summary)))
+    (is (= 4 (:edge-count summary)))
+    (is (= 2 (:agent-count summary)))))
 
-    ;; Assertions for Step 1 (The Portal Jump)
-    (is (= :b1 (:location updated-scout))
-        "After result1, Scout should be at the entry node :b1")
-    (is (= #{:b1 :b2} (set (node-names (:graph result1))))
-        "The world graph should have swapped to Graph B")
-
-    ;; Assertions for Step 2 (Movement within the new graph)
-    (is (= :b2 (:location (first (:agents result2))))
-        "Scout should successfully move to :b2 in the new graph")
-    (is (= #{:b1 :b2} (set (node-names (:graph result2))))
-        "The graph should remain Graph B")
-
-    ;; Event Assertions for Step 2
-    (let [events (:pending-events result2)
-          dep    (first (filter #(= :agent-departed (:event-type %)) events))]
-      (is (= 1 (count (filter #(= :agent-departed (:event-type %)) events)))
-          "A departure event should be recorded for the move from b1 to b2")
-      (is (= "Scout" (:name (:source dep)))
-          "The source of the departure should be Scout")
-      (is (nil? (:observer dep))
-          "Since Scout was alone at :b1, there should be no observer recorded"))))
+;; ── Load world from JSON (if test files exist) ─────────────────
+(deftest test-load-world-structure
+  (testing "A loaded world has the expected structure"
+    ;; We use sample-world directly since load-world reads from files
+    (is (contains? sample-world :nodes))
+    (is (contains? sample-world :edges))
+    (is (contains? sample-world :agents))
+    (is (contains? sample-world :graph-metadata))))

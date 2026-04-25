@@ -10,21 +10,21 @@
   [filepath]
   (let [config (json/parse-string (slurp filepath) true)
         graphs (:graphs config)
-
+        
         ;; Flatten all nodes into one map
         all-nodes (reduce (fn [acc graph]
                             (merge acc (:nodes graph)))
                           {}
                           (vals graphs))
-
+        
         ;; Flatten all edges into one vector, converting node IDs to keywords
         all-edges (reduce (fn [acc graph]
                             (into acc
-                                  (map (fn [edge]
-                                         [(keyword (first edge))
-                                          (keyword (second edge))
-                                          (nth edge 2)])
-                                       (:edges graph))))
+                              (map (fn [edge]
+                                     [(keyword (first edge))
+                                      (keyword (second edge))
+                                      (nth edge 2)])
+                                   (:edges graph))))
                           []
                           (vals graphs))]
     {:nodes all-nodes
