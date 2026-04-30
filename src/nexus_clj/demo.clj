@@ -49,9 +49,9 @@
 
     ;; Path hazard display (risk on edge village→forest)
     (let [edge (->> (nx/edges-from @world-atom :village)
-                    (filter #(= (:to %) :forest))
+                    (filter #(= (:nexus/to %) :forest))
                     first)
-          risk (:risk edge "none")]
+          risk (:nexus/risk edge "none")]
       (println "⚠️  Risk on edge village→forest:" risk))
     (println)
 

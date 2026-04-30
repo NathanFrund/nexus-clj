@@ -3,16 +3,19 @@
     "village": {
       "nodes": {
         "village": {
-          "label": "Village Square",
-          "terrain": "open"
+          "label": "Village Square"
         },
         "elderHut": {
           "label": "Elder's Hut",
-          "terrain": "building"
+          "properties": {
+            "npc": "Elder"
+          }
         },
         "forest": {
           "label": "Forest Path",
-          "terrain": "woods"
+          "properties": {
+            "hazardLevel": "high"
+          }
         }
       },
       "edges": [

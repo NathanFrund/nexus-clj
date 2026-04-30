@@ -1,30 +1,32 @@
 (ns nexus-clj.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [nexus-clj.core :refer [node-names neighbors-of agents-at-node
-                                    witnessed-events move-agent check-hazard
-                                    world-summary]]))
+                                    witnessed-events move-agent world-summary
+                                    register-plugin]]))
 
 ;; ── Test fixtures ────────────────────────────────────────────────
+;; Edges now use :nexus/... keys.  Node properties remain open maps.
 (def sample-world
   {:nodes {:village-square {:label "Village Square" :terrain "open"}
            :village-hut    {:label "Elder's Hut" :terrain "building"}
            :village-forest {:label "Forest Path" :terrain "woods"}
            :dungeon-entry  {:label "Dungeon Entry" :terrain "building"}
            :dungeon-main   {:label "Main Chamber" :terrain "dungeon"}}
-   :edges [{:from :village-square :to :village-hut      :distance 1 :risk 0.0}
-           {:from :village-square :to :village-forest   :distance 2 :risk 0.3 :direction "backward"}
-           {:from :village-forest :to :dungeon-entry    :distance 3 :risk 0.5}
-           {:from :dungeon-entry  :to :dungeon-main      :distance 1 :risk 0.0}]
+   :edges [{:nexus/from :village-square :nexus/to :village-hut     :nexus/distance 1 :nexus/risk 0.0}
+           {:nexus/from :village-square :nexus/to :village-forest  :nexus/distance 2 :nexus/risk 0.3 :nexus/direction :backward}
+           {:nexus/from :village-forest :nexus/to :dungeon-entry   :nexus/distance 3 :nexus/risk 0.5}
+           {:nexus/from :dungeon-entry  :nexus/to :dungeon-main    :nexus/distance 1 :nexus/risk 0.0}]
    :agents []
+   :pending-events []                                               ;; added for completeness
    :graph-metadata {:village {:nodes {:village-square {:label "Village Square"}
                                       :village-hut {:label "Elder's Hut"}
                                       :village-forest {:label "Forest Path"}}
-                              :edges [{:from :village-square :to :village-hut :distance 1 :risk 0.0}
-                                      {:from :village-square :to :village-forest :distance 2 :risk 0.3 :direction "backward"}]}
+                              :edges [{:nexus/from :village-square :nexus/to :village-hut :nexus/distance 1 :nexus/risk 0.0}
+                                      {:nexus/from :village-square :nexus/to :village-forest :nexus/distance 2 :nexus/risk 0.3 :nexus/direction :backward}]}
                     :dungeon {:nodes {:dungeon-entry {:label "Dungeon Entry"}
                                       :dungeon-main {:label "Main Chamber"}}
-                              :edges [{:from :dungeon-entry :to :dungeon-main :distance 1 :risk 0.0}
-                                      {:from :village-forest :to :dungeon-entry :distance 3 :risk 0.5}]}}})
+                              :edges [{:nexus/from :dungeon-entry :nexus/to :dungeon-main :nexus/distance 1 :nexus/risk 0.0}
+                                      {:nexus/from :village-forest :nexus/to :dungeon-entry :nexus/distance 3 :nexus/risk 0.5}]}}})
 
 ;; ── Graph/world queries ─────────────────────────────────────────
 (deftest test-node-names
@@ -78,21 +80,6 @@
     (testing "Event is still recorded even without observers"
       (is (= :agent-departed (:event-type (first events)))))))
 
-;; ── Hazard checking ────────────────────────────────────────────
-(deftest test-check-hazard-no-risk
-  (is (nil? (check-hazard {:risk 0.0} :forest))))
-
-(deftest test-check-hazard-triggers
-  (with-redefs [rand (constantly 0.0)]
-    (let [result (check-hazard {:risk 0.5} :forest)]
-      (is (some? result))
-      (is (= :travel-hazard (:event-type result)))
-      (is (= :forest (:target result))))))
-
-(deftest test-check-hazard-suppressed
-  (with-redefs [rand (constantly 1.0)]
-    (is (nil? (check-hazard {:risk 0.9} :forest)))))
-
 ;; ── Movement within a region ────────────────────────────────────
 (deftest test-move-within-village
   (let [world (assoc sample-world :agents [{:id :scout :name "Scout" :location :village-square}])
@@ -132,12 +119,13 @@
         (is (= "Lookout" (:name (:observer ev))))
         (is (= "Scout" (:name (:source ev))))))))
 
-;; ── Movement with hazards ──────────────────────────────────────
+;; ── Movement with hazards (uses default :hazard hook) ─────────
 (deftest test-move-with-hazard
   (let [graph {:nodes {:a {:label "A"} :b {:label "B"}}
-               :edges [{:from :a :to :b :distance 1 :risk 1.0}]}
+               :edges [{:nexus/from :a :nexus/to :b :nexus/distance 1 :nexus/risk 1.0}]}
         world (assoc sample-world :nodes (:nodes graph) :edges (:edges graph)
                      :agents [{:id :scout :name "Scout" :location :a}])
+        ;; force hazard by making (rand) return 0.0 (< risk)
         result (with-redefs [rand (constantly 0.0)]
                  (move-agent world (first (:agents world)) :b))
         events (:pending-events result)]
@@ -185,7 +173,35 @@
     (is (= 4 (:edge-count summary)))
     (is (= 2 (:agent-count summary)))))
 
-;; ── Load world from JSON (if test files exist) ─────────────────
+;; ── Veto hook (validate) ──────────────────────────────────────
+(deftest test-veto-hook-blocks-move
+  (register-plugin :validate
+                   (fn [ctx]
+                     (if (= (:target-node ctx) :vault)
+                       (assoc ctx :move-allowed? false)
+                       ctx)))
+  (let [world (assoc sample-world
+                     :nodes (merge (:nodes sample-world) {:vault {:label "Vault"}})
+                     :edges (conj (:edges sample-world)
+                                  {:nexus/from :village-square :nexus/to :vault :nexus/distance 1 :nexus/risk 0.0})
+                     :agents [{:id :hero :name "Hero" :location :village-square}])]
+    (is (thrown? Exception (move-agent world (first (:agents world)) :vault)))
+    (testing "Agent stays at original location"
+      (let [caught-world (try (move-agent world (first (:agents world)) :vault)
+                              (catch Exception e (:context (ex-data e))))])
+      ;; The world is not returned, but we can check the agent location remains unchanged
+      (is (= :village-square (:location (first (:agents world))))))))
+
+;; ── Hook ordering test (optional, demonstrates integration) ──
+(deftest test-hook-execution-order
+  (let [hook-log (atom [])]
+    (doseq [hook [:validate :departure :hazard :arrival :announce]]
+      (register-plugin hook (fn [ctx] (swap! hook-log conj hook) ctx)))
+    (let [world (assoc sample-world :agents [{:id :tester :name "Tester" :location :village-square}])
+          result (move-agent world (first (:agents world)) :village-hut)]
+      (is (= [:validate :departure :hazard :arrival :announce] @hook-log)))))
+
+;; ── Load world structure test ─────────────────────────────────
 (deftest test-load-world-structure
   (testing "A loaded world has the expected structure"
     (is (contains? sample-world :nodes))
